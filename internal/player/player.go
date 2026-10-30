@@ -32,9 +32,18 @@ type Player struct {
 	Normalize func() bool
 	// Cache keeps the songs played, if set.
 	Cache *Cache
+	// StreamFallback, if set, finds a stream where NetEase has none, from
+	// an imported music source (LX sources for the greyed-out VIP songs).
+	StreamFallback func(t netease.Track, level string) (*netease.Stream, error)
+	// SourceURL, if set, resolves a track that belongs to an imported
+	// source's platform (t.Platform set) rather than NetEase.
+	SourceURL func(t netease.Track, level string) (*netease.Stream, error)
 	// Changed, if set, hears that what plays, where it is or whether it
 	// plays changed.
 	Changed func()
+
+	// songURL finds where NetEase streams a track; tests swap it out.
+	songURL func(id int64, level string) (*netease.Stream, error)
 
 	queue   []netease.Track
 	order   []int // the queue's indices in play order: shuffled or not
@@ -75,7 +84,7 @@ type Player struct {
 }
 
 func New(post func(func())) *Player {
-	p := &Player{post: post, at: -1, volume: 0.8, gain: 1}
+	p := &Player{post: post, at: -1, volume: 0.8, gain: 1, songURL: netease.SongURL}
 	// Music, mixed far enough ahead to play on while macOS keeps the app
 	// waiting, as it does while its appearance changes.
 	audio.SetLatency(audio.LatencyPlayback)
@@ -602,10 +611,12 @@ func (p *Player) loadSkipping(at, skipped int, play bool, from time.Duration) {
 	}()
 
 	go func() {
-		lrc, trans, yrc, err := netease.Lyrics(t.ID)
 		var lines []lyrics.Line
-		if err == nil {
-			lines = lyrics.Build(lrc, trans, yrc)
+		if t.Platform == "" {
+			lrc, trans, yrc, err := netease.Lyrics(t.ID)
+			if err == nil {
+				lines = lyrics.Build(lrc, trans, yrc)
+			}
 		}
 		p.post(func() {
 			if gen == p.gen {
@@ -686,7 +697,7 @@ func (p *Player) open(t netease.Track, level string) (*netease.Stream, stream, e
 	dl, info, ok := p.Cache.lookup(t.ID, level)
 	if !ok {
 		var err error
-		info, err = netease.SongURL(t.ID, level)
+		info, err = p.streamFor(t, level)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -698,6 +709,23 @@ func (p *Player) open(t netease.Track, level string) (*netease.Stream, stream, e
 		return nil, nil, err
 	}
 	return info, s, nil
+}
+
+// streamFor finds where to stream a track: from NetEase, or from an
+// imported music source when NetEase has none (a greyed-out VIP song), or
+// because the track belongs to an imported source's platform.
+func (p *Player) streamFor(t netease.Track, level string) (*netease.Stream, error) {
+	if t.Platform != "" && p.SourceURL != nil {
+		return p.SourceURL(t, level)
+	}
+	info, err := p.songURL(t.ID, level)
+	if err == netease.ErrUnavailable && p.StreamFallback != nil {
+		info, err = p.StreamFallback(t, level)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return info, nil
 }
 
 // Session is where playback was left, to pick up again.

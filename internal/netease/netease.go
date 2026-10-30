@@ -41,6 +41,11 @@ type Track struct {
 	Duration int64    `json:"dt"` // milliseconds
 	Fee      int      `json:"fee"`
 	Alias    []string `json:"alia"`
+	// Platform, when set, is a music source's platform (kw, kg, tx, mg)
+	// rather than NetEase: such a track streams from an imported source.
+	// SourceID is its id on that platform, which may not be numeric.
+	Platform string `json:"platform,omitempty"`
+	SourceID string `json:"sourceId,omitempty"`
 	// Reason says why a daily recommendation was picked.
 	Reason string `json:"reason"`
 	// Privilege is what the listener may do with the track, if known.

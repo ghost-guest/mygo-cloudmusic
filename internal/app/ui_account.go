@@ -1,6 +1,7 @@
 package app
 
 import (
+	"log"
 	"runtime"
 	"time"
 
@@ -27,6 +28,14 @@ type loginState struct {
 // home page for whoever is listening.
 func (a *app) boot() {
 	a.homeLoading = true
+	// Preconfigure the default music sources once, on first launch, without
+	// holding up the window while they download.
+	if a.sources != nil {
+		go func() {
+			a.sources.EnsureDefaults(func(msg string) { log.Println(msg) })
+			a.post(func() { a.changed() })
+		}()
+	}
 	go func() {
 		var prof *netease.Profile
 		if netease.RestoreSession() {

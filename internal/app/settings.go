@@ -79,6 +79,15 @@ func settingsPath() (string, error) {
 	return filepath.Join(dir, "settings.json"), nil
 }
 
+// sourcesDir is where imported music source scripts live.
+func sourcesDir() string {
+	dir, err := mygo.App.Path(mygo.PathUserData)
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "sources")
+}
+
 // oldName is what the app was called before it took its bundle's name, and
 // kept its data under.
 const oldName = "网易云音乐"

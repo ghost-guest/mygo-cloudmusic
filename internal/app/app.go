@@ -9,6 +9,7 @@ import (
 
 	"netease-music-mygo/internal/netease"
 	"netease-music-mygo/internal/player"
+	"netease-music-mygo/internal/source"
 )
 
 type pageKind int
@@ -34,6 +35,9 @@ type route struct {
 	// query and kind are what a search page searched for.
 	query string
 	kind  netease.SearchType
+	// source, when set, is a music source's platform (kw, kg, tx, mg) the
+	// search runs on instead of NetEase.
+	source string
 }
 
 // app is the state both windows show. Everything in it is read and changed
@@ -57,6 +61,7 @@ type app struct {
 	accountOpen  bool           // the dropdown of the account row shows
 	naming       nameDialog     // the name of a playlist asked for
 	deleting     deleteDialog   // whether to delete a playlist, asked
+	importing    importDialog   // the music source import dialog
 	liked        map[int64]bool // the songs the listener likes
 	toast        string         // a message to show once
 	picked       pickedUp       // the song a login picked up, waiting to play
@@ -96,6 +101,7 @@ type app struct {
 	searchBox   ui.Handle
 	searches    map[route]*searchData // the results of each search, by its page
 	searched    route                 // the search last shown, which the sidebar goes back to
+	source      string                // an imported source's platform the search runs on, else ""
 	suggestions suggestState          // what the search field's query may be after
 
 	nowPlaying  bool
@@ -140,6 +146,7 @@ type app struct {
 	settingsWin *mygo.Window
 	cacheUsed   int64 // the bytes the song cache takes, -1 until measured
 	updates     bool  // the update plugin is used (useUpdater)
+	sources     *source.SourceManager // imported LX music sources
 
 	restored     bool   // playback picked up where it was left
 	savedSession string // the session as last kept
@@ -164,6 +171,9 @@ func (a *app) redraw() {
 	}
 	if a.notch != nil && a.notch.win != nil {
 		a.notch.win.Invalidate()
+	}
+	if a.settingsWin != nil {
+		a.settingsWin.Invalidate()
 	}
 }
 
@@ -211,6 +221,10 @@ func Run() error {
 		a.pl.Quality = func() string { return a.settings.Quality }
 		a.pl.Normalize = func() bool { return a.settings.Normalize }
 		a.pl.Cache = newSongCache(a.settings.CacheMB)
+		a.sources = source.NewManager(sourcesDir())
+		a.sources.LoadAll()
+		a.pl.StreamFallback = a.sources.ResolveWyURL
+		a.pl.SourceURL = a.sources.ResolveTrackURL
 		a.pl.Changed = func() {
 			a.keepSession()
 			a.syncCaptions()
