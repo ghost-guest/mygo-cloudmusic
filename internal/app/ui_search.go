@@ -137,6 +137,12 @@ func (a *app) moreSourceResults(r route, d *searchData) {
 // sourceToNeteaseTrack wraps a search hit from an imported source into a
 // netease.Track the player can stream through that source.
 func (a *app) sourceToNeteaseTrack(st source.SourceTrack) netease.Track {
+	// A platform hit the platform itself gates (a paid QQ song) is shown as
+	// unavailable instead of looking playable and then failing.
+	fee := 0
+	if st.Paywalled {
+		fee = 1
+	}
 	return netease.Track{
 		// Not a NetEase id: a stable hash so rows key and cache apart, and
 		// the source's own id travels in SourceID.
@@ -147,6 +153,7 @@ func (a *app) sourceToNeteaseTrack(st source.SourceTrack) netease.Track {
 		Album:    netease.Album{Name: st.Album},
 		Platform: st.Source,
 		SourceID: st.ID,
+		Fee:      fee,
 	}
 }
 
@@ -275,26 +282,30 @@ func (a *app) searchHeader(c *ui.Context, d *searchData) {
 	})
 }
 
-// sourceSelect is the "来源" dropdown: NetEase, or an imported source's
-// platform (kw, kg, tx, mg) to search instead. Only songs make sense on a
-// source platform, so choosing one searches songs.
-func (a *app) sourceSelect(c *ui.Context, r route) {
+// sourceOptions returns the "来源" choices: NetEase, then each platform an
+// enabled source can search, and a label→platform-id map. Empty (just
+// NetEase) when no source supports search, so the dropdown stays hidden.
+func (a *app) sourceOptions() (labels []string, ids map[string]string) {
+	labels = []string{"网易云"}
+	ids = map[string]string{"网易云": ""}
 	if a.sources == nil {
-		return
+		return labels, ids
 	}
-	choices := a.sources.SearchPlatforms()
-	if len(choices) == 0 {
-		return
-	}
-	labels := []string{"网易云"}
-	ids := map[string]string{"网易云": ""}
-	for _, p := range choices {
+	for _, p := range a.sources.SearchPlatforms() {
 		if _, ok := ids[p.Name]; ok {
 			continue
 		}
 		labels = append(labels, p.Name)
 		ids[p.Name] = p.ID
 	}
+	return labels, ids
+}
+
+// sourceSelect is the "来源" dropdown on a search's page: NetEase, or an
+// imported source's platform (kw, kg, tx, mg) to search instead. Only songs
+// make sense on a source platform, so choosing one searches songs.
+func (a *app) sourceSelect(c *ui.Context, r route) {
+	labels, ids := a.sourceOptions()
 	if len(labels) == 1 {
 		return
 	}
@@ -304,7 +315,7 @@ func (a *app) sourceSelect(c *ui.Context, r route) {
 			chosen = name
 		}
 	}
-	if ui.Select(c.Key("search-source"), &chosen, labels).Label("来源").Width(120).Changed() {
+	if ui.Select(c.Key("search-source"), &chosen, labels).Label("来源").Width(110).Changed() {
 		a.source = ids[chosen]
 		a.show(route{page: pageSearch, query: r.query, kind: netease.SearchSongs, source: a.source})
 	}

@@ -2,17 +2,24 @@ package source
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"netease-music-mygo/internal/netease"
 )
+
+//go:embed defaults/*.js
+var bundledFS embed.FS
 
 // SourceManager holds the imported sources, persists them, and answers
 // stream and search requests by dispatching to the right source.
@@ -25,6 +32,9 @@ type SourceManager struct {
 	// first: map order is not stable, and the priority matters.
 	order     map[string]int
 	nextOrder int
+	// probeURL, when set, stands in for the network probe that confirms a
+	// resolved URL serves audio. Tests swap it so no real request is made.
+	probeURL func(url string) error
 }
 
 // LoadedSource is one imported source and whether it is in use.
@@ -52,20 +62,26 @@ func NewManager(dir string) *SourceManager {
 	}
 }
 
-// DefaultSources are the music sources preconfigured on first launch: the
-// ones that resolve NetEase (wy) streams for greyed-out or VIP songs. Order
-// is the fallback priority, best first. They can be disabled or removed by
-// the user; removing one from here later will not delete an already-imported
-// copy unless the user removes it.
+// DefaultSources are the music sources bundled with the app: the ones that
+// resolve NetEase (wy) streams for greyed-out or VIP songs, tried in order
+// until one returns a playable link. They are embedded so they need no
+// network on first launch; the user can still disable, reorder, or remove
+// them, and a removed one stays removed. Order is the fallback priority,
+// best first — verified to serve audio for VIP songs at build time.
 var DefaultSources = []string{
-	"https://raw.githubusercontent.com/pdone/lx-music-source/main/changqing/latest.js",
-	"https://raw.githubusercontent.com/pdone/lx-music-source/main/huanyin/latest.js",
-	"https://raw.githubusercontent.com/pdone/lx-music-source/main/jiexiang/latest.js",
+	"helloworld",
+	"hyw",
+	"fish",
+	"qdy",
 }
 
 // disableDefaultsKey marks that the user has opted out of default sources,
 // so EnsureDefaults stays a no-op even after the source list is cleared.
 const disableDefaultsKey = "disable-default-sources"
+
+// seededDefaultsKey lists the defaults already seeded, so a default the user
+// removed stays removed across launches while one bundled later is added.
+const seededDefaultsKey = "seeded-defaults"
 
 // DisableDefaults stops EnsureDefaults from ever preconfiguring sources.
 func (m *SourceManager) DisableDefaults() {
@@ -80,31 +96,96 @@ func (m *SourceManager) defaultsDisabledLocked() bool {
 	return err == nil
 }
 
-// EnsureDefaults imports the default sources once, on first launch. It is a
-// no-op afterwards: anything already in the user's source list is left
-// alone, and a user who cleared them keeps them clear. Failures are logged,
-// never fatal.
+// readSeeded returns the slugs of the defaults already seeded.
+func (m *SourceManager) readSeeded() map[string]bool {
+	out := map[string]bool{}
+	b, err := os.ReadFile(filepath.Join(m.dir, seededDefaultsKey))
+	if err != nil {
+		return out
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if slug := strings.TrimSpace(line); slug != "" {
+			out[slug] = true
+		}
+	}
+	return out
+}
+
+// writeSeeded records the slugs of the defaults seeded so far.
+func (m *SourceManager) writeSeeded(seeded map[string]bool) {
+	var b strings.Builder
+	for _, slug := range DefaultSources {
+		if seeded[slug] {
+			b.WriteString(slug + "\n")
+		}
+	}
+	_ = os.MkdirAll(m.dir, 0o700)
+	_ = os.WriteFile(filepath.Join(m.dir, seededDefaultsKey), []byte(b.String()), 0o600)
+}
+
+// EnsureDefaults writes any bundled source not yet present, so the app ships
+// with working sources on first launch and after an update that adds one.
+// The scripts are embedded, so this needs no network. It leaves the user's
+// list alone otherwise: a default that is already there is kept as is, and
+// one the user removed stays removed (its slug is remembered in seeded).
+// Clearing every source opts out entirely. Failures are logged, never fatal.
 func (m *SourceManager) EnsureDefaults(logf func(string)) {
 	m.mu.Lock()
-	if m.defaultsDisabledLocked() || len(m.sources) > 0 {
+	if m.defaultsDisabledLocked() {
 		m.mu.Unlock()
 		return
 	}
+	seeded := m.readSeeded()
 	m.mu.Unlock()
-	for _, url := range DefaultSources {
-		slug, err := m.Add(url)
-		if err != nil {
-			if logf != nil {
-				logf("音乐源导入失败 " + url + "：" + err.Error())
+
+	changed := false
+	for _, slug := range DefaultSources {
+		m.mu.RLock()
+		_, present := m.sources[slug]
+		m.mu.RUnlock()
+		if present {
+			// A default already there (seeded before, or imported by the
+			// user) is left alone; record it so a future removal sticks.
+			if !seeded[slug] {
+				seeded[slug] = true
+				changed = true
 			}
 			continue
 		}
+		if seeded[slug] {
+			// Seeded before and now gone: the user removed it, keep it gone.
+			continue
+		}
+		js, err := bundledFS.ReadFile("defaults/" + slug + ".js")
+		if err != nil {
+			if logf != nil {
+				logf("音乐源读取失败 " + slug + "：" + err.Error())
+			}
+			continue
+		}
+		if _, err := m.addScript(slug, "bundled:"+slug, js); err != nil {
+			if logf != nil {
+				logf("音乐源导入失败 " + slug + "：" + err.Error())
+			}
+			continue
+		}
+		seeded[slug] = true
+		changed = true
 		if logf != nil {
 			if ls := m.lookup(slug); ls != nil {
 				logf("已导入音乐源 " + ls.Name)
 			}
 		}
 	}
+	if changed {
+		m.writeSeeded(seeded)
+	}
+}
+
+// HasWy reports whether an enabled wy source is running, so a NetEase song
+// without a stream of its own (a greyed-out VIP one) may still play.
+func (m *SourceManager) HasWy() bool {
+	return len(m.sourcesFor("wy", "musicUrl")) > 0
 }
 
 // lookup returns a source snapshot by slug with the lock held.
@@ -207,14 +288,21 @@ func firstNonEmpty(a, b string) string {
 // slug on success.
 func (m *SourceManager) Add(url string) (string, error) {
 	url = strings.TrimSpace(url)
-	if url == "" {
-		return "", fmt.Errorf("empty source url")
+	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		return "", fmt.Errorf("source url must be http(s): %q", url)
 	}
 	slug := slugOf(url)
 	js, err := loadFromURL(context.Background(), url)
 	if err != nil {
 		return "", fmt.Errorf("fetch source: %w", err)
 	}
+	return m.addScript(slug, url, js)
+}
+
+// addScript saves js as slug's script, starts it, and persists. slug is the
+// stable key (a URL hash, or the bundled source name); origin is where it
+// came from, kept for display and re-fetch.
+func (m *SourceManager) addScript(slug, origin string, js []byte) (string, error) {
 	path, err := saveScript(m.dir, slug, js)
 	if err != nil {
 		return "", err
@@ -223,7 +311,7 @@ func (m *SourceManager) Add(url string) (string, error) {
 	defer m.mu.Unlock()
 	ls := &LoadedSource{
 		Slug:    slug,
-		URL:     url,
+		URL:     origin,
 		File:    path,
 		Enabled: true,
 	}
@@ -343,33 +431,54 @@ func (m *SourceManager) sourcesFor(platform, action string) []*Source {
 
 // ResolveWyURL returns a stream for a NetEase track from an enabled wy
 // source, used as a fallback when NetEase itself has none. It tries each
-// wy source in turn, so one slow or dead source does not lose the song.
+// wy source in turn, and each source at the best quality it offers for the
+// requested NetEase level, so a slow or dead source does not lose the song.
+// A resolved URL is probed before being returned: sources sometimes hand
+// back a 404 page instead of a link, and we must not trade a missing song
+// for a broken one.
 func (m *SourceManager) ResolveWyURL(t netease.Track, level string) (*netease.Stream, error) {
-	info := map[string]any{
-		"musicInfo": map[string]any{
-			"id":        t.ID,
-			"name":      t.Name,
-			"singer":    t.ArtistNames(),
-			"albumName": t.Album.Name,
-			"source":    "wy",
-			"songmid":   strconv.FormatInt(t.ID, 10),
-			"albumId":   t.Album.ID,
-		},
-		"type": level,
+	songmid := strconv.FormatInt(t.ID, 10)
+	musicInfo := map[string]any{
+		"id":        t.ID,
+		"name":      t.Name,
+		"singer":    t.ArtistNames(),
+		"albumName": t.Album.Name,
+		"source":    "wy",
+		"songmid":   songmid,
+		"albumId":   t.Album.ID,
 	}
 	var lastErr error
+	// Try each source in import order, and within a source, the asked quality
+	// then lower ones: a VIP song an imported source can serve may only be
+	// there at 128k, and one broken quality must not lose the song.
 	for _, src := range m.sourcesFor("wy", "musicUrl") {
-		v, err := src.Request("musicUrl", "wy", info)
-		if err != nil {
-			lastErr = err
-			continue
+		quals := wyQualityOrder(level, src.qualitiesFor("wy"))
+		for _, q := range quals {
+			v, err := src.Request("musicUrl", "wy", map[string]any{"musicInfo": musicInfo, "type": q})
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			urlStr, ok := v.(string)
+			if !ok || strings.TrimSpace(urlStr) == "" {
+				lastErr = fmt.Errorf("wy source returned no url")
+				continue
+			}
+			urlStr = strings.TrimSpace(urlStr)
+			if err := m.probeStream(urlStr); err != nil {
+				lastErr = err
+				continue
+			}
+			return &netease.Stream{URL: urlStr, Level: level, Type: inferType(urlStr)}, nil
 		}
-		urlStr, ok := v.(string)
-		if !ok || strings.TrimSpace(urlStr) == "" {
-			lastErr = fmt.Errorf("wy source returned no url")
-			continue
+	}
+	// Last resort: NetEase's own web-player link. It serves most greyed-out
+	// and VIP songs even though the API refuses, so one song need not fail
+	// just because every imported source's API is down.
+	if u, err := wyOuterURL(t.ID); err == nil {
+		if err := m.probeStream(u); err == nil {
+			return &netease.Stream{URL: u, Level: level, Type: inferType(u)}, nil
 		}
-		return &netease.Stream{URL: strings.TrimSpace(urlStr), Level: level, Type: inferType(urlStr)}, nil
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("no enabled wy source")
@@ -377,17 +486,152 @@ func (m *SourceManager) ResolveWyURL(t netease.Track, level string) (*netease.St
 	return nil, lastErr
 }
 
-// Search queries an enabled platform's source for keyword.
+// wyOuterURL is NetEase's unauthenticated web-player fallback: it redirects
+// to the track's audio (full length for most songs, 404 for a few).
+func wyOuterURL(id int64) (string, error) {
+	return "https://music.163.com/song/media/outer/url?id=" + strconv.FormatInt(id, 10) + ".mp3", nil
+}
+
+// qualitiesFor returns the qualities a platform's sources report, in the
+// order their sources are tried (best first).
+func (s *Source) qualitiesFor(platform string) []string {
+	meta := s.Meta()
+	if info, ok := meta.Sources[platform]; ok {
+		return info.Qualitys
+	}
+	return nil
+}
+
+// wyQualityOrder returns the qualities to try, best first, for a NetEase
+// level and the qualities the source offers. NetEase levels (standard/higher/
+// exhigh/lossless/hires) map to source keys (128k/320k/flac/...); the best
+// matching key comes first, then 128k, so a song the source only serves at
+// 128k still plays without trying every quality on every source.
+func wyQualityOrder(level string, quals []string) []string {
+	// Source quality keys from best to worst.
+	rank := []string{"hires", "flac24bit", "flac", "320k", "192k", "128k"}
+	start := 3 // 320k by default
+	switch {
+	case level == "lossless" || level == "hires":
+		start = 0
+	case level == "exhigh" || level == "higher":
+		start = 3
+	default:
+		start = 5
+	}
+	var out []string
+	seen := map[string]bool{}
+	add := func(q string) {
+		if q != "" && !seen[q] {
+			out = append(out, q)
+			seen[q] = true
+		}
+	}
+	for _, q := range rank[start:] {
+		if hasQual(quals, q) {
+			add(q)
+			break
+		}
+	}
+	// 128k is the most widely served; try it too if the best differs.
+	if hasQual(quals, "128k") {
+		add("128k")
+	}
+	// Whatever else the source lists, one more at most.
+	for _, q := range quals {
+		if len(out) >= 2 {
+			break
+		}
+		add(q)
+	}
+	if len(out) == 0 {
+		out = []string{"128k"}
+	}
+	return out
+}
+
+func hasQual(quals []string, q string) bool {
+	for _, x := range quals {
+		if x == q {
+			return true
+		}
+	}
+	return false
+}
+
+// probeStream checks that url serves audio, so a 404 page is not returned
+// as a usable track. It is cheap: a ranged HEAD-free GET of a few bytes.
+func (m *SourceManager) probeStream(url string) error {
+	if m.probeURL != nil {
+		return m.probeURL(url)
+	}
+	return probeStream(url)
+}
+
+// probeStream checks that url serves audio, so a 404 page is not returned
+// as a usable track. It is cheap: a ranged HEAD-free GET of a few bytes.
+func probeStream(url string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Range", "bytes=0-1023")
+	req.Header.Set("User-Agent", hostUserAgent)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, io.LimitReader(resp.Body, 2048))
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("source returned status %d", resp.StatusCode)
+	}
+	if strings.HasPrefix(ct, "audio/") || strings.HasPrefix(ct, "video/") {
+		return nil
+	}
+	// Some hosts answer 200 with an HTML error body; reject anything that
+	// does not look like media so we keep trying the next source.
+	if strings.Contains(ct, "text/html") {
+		return fmt.Errorf("source returned an html error page")
+	}
+	return nil
+}
+
+// Search queries a platform for keyword: an imported source when it declares
+// a search action, otherwise the built-in Kuwo search. It returns the hits,
+// or an error when every backend failed.
 func (m *SourceManager) Search(platform, keyword string, page, limit int) ([]SourceTrack, error) {
+	switch platform {
+	case "kw":
+		// Kuwo is searched natively; its public API outlives the bundled
+		// sources' dead search backends.
+		return KuwoSearch(keyword, page, limit)
+	case "tx":
+		// QQ Music, searched natively, so the 来源 dropdown returns real
+		// songs even though no imported source declares a search action.
+		return QQSearch(keyword, page, limit)
+	}
+	// LX sources read keyword/page/pagesize; older ones read limit instead.
 	info := map[string]any{
-		"source":  platform,
-		"keyword": keyword,
-		"page":    page,
-		"limit":   limit,
+		"source":   platform,
+		"keyword":  keyword,
+		"keywords": keyword,
+		"page":     page,
+		"limit":    limit,
+		"pagesize": limit,
 	}
 	var lastErr error
 	for _, src := range m.sourcesFor(platform, "search") {
-		v, err := src.Request("search", platform, info)
+		// The LX desktop contract names the action musicSearch; a source
+		// that declares it expects that name, while older ones accept search.
+		action := "search"
+		if pi, ok := src.Meta().Sources[platform]; ok && pi.Supports("musicSearch") {
+			action = "musicSearch"
+		}
+		v, err := src.Request(action, platform, info)
 		if err != nil {
 			lastErr = err
 			continue
@@ -411,13 +655,14 @@ type SourceTrack struct {
 	Source   string `json:"source"`
 	Interval string `json:"interval"`
 	Quality  string `json:"quality"`
+	// Paywalled marks a hit the platform will not stream without a paid
+	// subscription, so it is shown (and treated) as unavailable rather than
+	// looking playable and then failing.
+	Paywalled bool `json:"paywalled,omitempty"`
 }
 
 func parseSearchResult(v any) []SourceTrack {
-	arr, ok := v.([]any)
-	if !ok {
-		return nil
-	}
+	arr := searchList(v)
 	var out []SourceTrack
 	for _, item := range arr {
 		m, ok := item.(map[string]any)
@@ -425,13 +670,14 @@ func parseSearchResult(v any) []SourceTrack {
 			continue
 		}
 		t := SourceTrack{
-			ID:       asString(m["id"]),
-			Name:     asString(m["name"]),
-			Singer:   asString(m["singer"]),
-			Album:    asString(m["albumName"]),
-			Source:   asString(m["source"]),
-			Interval: asString(m["interval"]),
-			Quality:  asString(m["quality"]),
+			ID:        firstString(m["id"], m["songmid"], m["hash"], m["rid"]),
+			Name:      asString(m["name"]),
+			Singer:    asString(m["singer"]),
+			Album:     asString(m["albumName"]),
+			Source:    asString(m["source"]),
+			Interval:  firstString(m["interval"], m["duration"]),
+			Quality:   asString(m["quality"]),
+			Paywalled: asBool(m["paywalled"]),
 		}
 		if t.Name == "" {
 			continue
@@ -439,6 +685,34 @@ func parseSearchResult(v any) []SourceTrack {
 		out = append(out, t)
 	}
 	return out
+}
+
+// searchList unwraps a source's search result: a plain array, or an object
+// holding one. LX returns {list: [...]}, and some sources nest it under
+// data or songs.
+func searchList(v any) []any {
+	switch x := v.(type) {
+	case []any:
+		return x
+	case map[string]any:
+		for _, key := range []string{"list", "songs", "data", "result", "items"} {
+			if inner, ok := x[key]; ok {
+				if arr := searchList(inner); len(arr) > 0 {
+					return arr
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func firstString(vals ...any) string {
+	for _, v := range vals {
+		if s := asString(v); s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 func asString(v any) string {
@@ -454,6 +728,19 @@ func asString(v any) string {
 	}
 }
 
+func asBool(v any) bool {
+	switch b := v.(type) {
+	case bool:
+		return b
+	case float64:
+		return b != 0
+	case string:
+		return b == "1" || b == "true"
+	default:
+		return false
+	}
+}
+
 // inferType guesses the stream format from the URL; only mp3 and flac are
 // decoded by the player.
 func inferType(u string) string {
@@ -466,11 +753,27 @@ func inferType(u string) string {
 	}
 }
 
-// ResolveTrackURL resolves a track that belongs to an imported source's
-// platform (kw, kg, tx, mg), as a cross-platform search result does.
+// ResolveTrackURL resolves a track that belongs to a platform found by
+// cross-platform search (kw, kg, tx, mg). Kuwo (kw) is resolved natively —
+// it is also the built-in search backend — and the rest go through whatever
+// imported source serves that platform.
 func (m *SourceManager) ResolveTrackURL(t netease.Track, level string) (*netease.Stream, error) {
 	if t.Platform == "" {
 		return nil, fmt.Errorf("track has no platform")
+	}
+	if t.Platform == "kw" {
+		u, err := KuwoURL(t.SourceID, level)
+		if err != nil {
+			return nil, err
+		}
+		return &netease.Stream{URL: u, Level: level, Type: inferType(u)}, nil
+	}
+	if t.Platform == "tx" {
+		u, err := QQURL(t.SourceID, level)
+		if err != nil {
+			return nil, err
+		}
+		return &netease.Stream{URL: u, Level: level, Type: inferType(u)}, nil
 	}
 	songID := t.SourceID
 	if songID == "" {
@@ -519,8 +822,18 @@ var platformNames = map[string]string{
 	"wy": "网易云", "kw": "酷我", "kg": "酷狗", "tx": "QQ音乐", "mg": "咪咕", "ba": "百度",
 }
 
-// SearchPlatforms returns the platforms an enabled source can search, each
-// once, sorted by name.
+// builtinSearchPlatforms are platforms the app searches on its own, through
+// their public APIs, when no imported source declares a search action. The
+// bundled sources' search backends are dead, but Kuwo's and QQ's public APIs
+// still answer, so 酷我 and QQ音乐 are always offered even with zero sources.
+var builtinSearchPlatforms = []PlatformChoice{
+	{ID: "kw", Name: "酷我"},
+	{ID: "tx", Name: "QQ音乐"},
+}
+
+// SearchPlatforms returns the platforms the user may search across: those an
+// imported source can search, plus the built-in ones (Kuwo), each once,
+// sorted by name.
 func (m *SourceManager) SearchPlatforms() []PlatformChoice {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -543,6 +856,12 @@ func (m *SourceManager) SearchPlatforms() []PlatformChoice {
 				name = plat
 			}
 			out = append(out, PlatformChoice{ID: plat, Name: name})
+		}
+	}
+	for _, b := range builtinSearchPlatforms {
+		if !seen[b.ID] {
+			seen[b.ID] = true
+			out = append(out, b)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

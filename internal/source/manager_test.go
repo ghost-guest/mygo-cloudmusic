@@ -1,6 +1,7 @@
 package source
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -24,14 +25,14 @@ on(EVENT_NAMES.request, ({ source, action, info }) => {
   if (action === 'search') return new Promise((resolve, reject) => {
     request(%q, { method: 'GET' }, (err, resp) => {
       if (err) return reject(new Error(err))
-      resolve(resp.body.list.map(x => ({ id: x.id, name: x.name, singer: x.singer, albumName: x.album, source: 'kw' })))
+      resolve(resp.body.list.map(x => ({ id: x.id, name: x.name, singer: x.singer, albumName: x.album, source: 'mg' })))
     })
   })
   return Promise.reject(new Error('no ' + action))
 })
 send(EVENT_NAMES.inited, { sources: {
   wy: { name: '网易云', type: 'music', actions: ['musicUrl'], qualitys: ['128k'] },
-  kw: { name: '酷我', type: 'music', actions: ['search'], qualitys: ['128k'] }
+  mg: { name: '咪咕', type: 'music', actions: ['search'], qualitys: ['128k'] }
 } })
 `, srv.URL)
 
@@ -45,6 +46,7 @@ send(EVENT_NAMES.inited, { sources: {
 	ls := &LoadedSource{Slug: "test", File: path, Enabled: true}
 	m.sources["test"] = ls
 	m.startLocked(ls)
+	m.probeURL = func(url string) error { return nil }
 	m.mu.Unlock()
 	if ls.Error != "" {
 		t.Fatalf("start: %s", ls.Error)
@@ -59,12 +61,39 @@ send(EVENT_NAMES.inited, { sources: {
 		t.Fatalf("stream = %+v", st)
 	}
 
-	got, err := m.Search("kw", "song", 1, 10)
+	got, err := m.Search("mg", "song", 1, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].Name != "SongA" || got[0].Singer != "ArtistB" || got[0].Source != "kw" {
+	if len(got) != 1 || got[0].Name != "SongA" || got[0].Singer != "ArtistB" || got[0].Source != "mg" {
 		t.Fatalf("search = %+v", got)
+	}
+}
+
+// EnsureDefaults writes the bundled sources from the embed, so a first
+// launch needs no network, and every one of them loads in the sandbox.
+func TestManagerEnsureDefaultsBundled(t *testing.T) {
+	m := NewManager(t.TempDir())
+	m.EnsureDefaults(func(s string) { t.Log(s) })
+	list := m.List()
+	if len(list) != len(DefaultSources) {
+		t.Fatalf("want %d bundled sources, got %d", len(DefaultSources), len(list))
+	}
+	for _, ls := range list {
+		if !ls.Enabled {
+			t.Errorf("%s not enabled", ls.Slug)
+		}
+		if ls.Error != "" {
+			t.Errorf("%s failed to load: %s", ls.Slug, ls.Error)
+		}
+	}
+	if !m.HasWy() {
+		t.Fatal("want a wy source after defaults")
+	}
+	// A second call is a no-op: no duplicates.
+	m.EnsureDefaults(nil)
+	if got := len(m.List()); got != len(DefaultSources) {
+		t.Fatalf("second call added sources: %d", got)
 	}
 }
 
@@ -82,6 +111,9 @@ send(EVENT_NAMES.inited, { sources: { wy: { name: 'wy', type: 'music', actions: 
 	ls := &LoadedSource{Slug: "test", File: path, Enabled: false}
 	m.sources["test"] = ls
 	m.startLocked(ls)
+	// The source is disabled, so only the outer-URL last resort could answer;
+	// make its probe fail to prove no source was used.
+	m.probeURL = func(url string) error { return errors.New("no") }
 	m.mu.Unlock()
 	defer ls.source.Close()
 	if _, err := m.ResolveWyURL(netease.Track{ID: 1}, "128k"); err == nil {
@@ -116,6 +148,7 @@ send(EVENT_NAMES.inited, { sources: { wy: { name: 'wy', type: 'music', actions: 
 	m.nextOrder = 2
 	m.startLocked(ls1)
 	m.startLocked(ls2)
+	m.probeURL = func(url string) error { return nil }
 	m.mu.Unlock()
 	defer ls1.source.Close()
 	defer ls2.source.Close()

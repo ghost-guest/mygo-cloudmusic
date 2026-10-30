@@ -36,10 +36,11 @@ func radioLabel(name string) string {
 	return "私人 FM"
 }
 
-func playable(tracks []netease.Track) []netease.Track {
+// playable keeps the tracks that may play, the app's sources counted in.
+func (a *app) playable(tracks []netease.Track) []netease.Track {
 	var out []netease.Track
 	for _, t := range tracks {
-		if t.Playable() {
+		if a.canPlay(t) {
 			out = append(out, t)
 		}
 	}
@@ -88,7 +89,7 @@ func (a *app) radioFeed(name string) func(got func([]netease.Track)) {
 				if err != nil {
 					break
 				}
-				tracks = playable(more)
+				tracks = a.playable(more)
 			}
 			a.post(func() { got(tracks) })
 		}()
@@ -175,7 +176,7 @@ func (a *app) startHeartMode() {
 				liked, _ = netease.PlaylistDetail(pid)
 			}
 			if liked != nil {
-				if ok := playable(liked.Tracks); len(ok) > 0 {
+				if ok := a.playable(liked.Tracks); len(ok) > 0 {
 					seed = &ok[rand.IntN(len(ok))]
 				}
 			}
@@ -194,7 +195,7 @@ func (a *app) startHeartMode() {
 				a.toast = "心动模式暂时无法开启，请稍后再试"
 				return
 			}
-			more = playable(more)
+			more = a.playable(more)
 			if fromPlaying && a.pl.Current() != nil && a.pl.Current().ID == seed.ID {
 				a.pl.RadioFrom(heartRadio, more, a.radioFeed(heartRadio))
 				return

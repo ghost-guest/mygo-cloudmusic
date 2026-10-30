@@ -441,7 +441,7 @@ func dailyRenewed(loaded, now time.Time) bool {
 func (a *app) loadPlaylist(id int64, thenPlay bool) {
 	if pl := a.playlists[id]; pl != nil {
 		if thenPlay {
-			a.pl.PlayQueue(pl.Tracks, firstPlayable(pl.Tracks))
+			a.pl.PlayQueue(pl.Tracks, a.firstPlayable(pl.Tracks))
 		}
 		return
 	}
@@ -460,15 +460,33 @@ func (a *app) loadPlaylist(id int64, thenPlay bool) {
 			}
 			a.playlists[id] = pl
 			if thenPlay {
-				a.pl.PlayQueue(pl.Tracks, firstPlayable(pl.Tracks))
+				a.pl.PlayQueue(pl.Tracks, a.firstPlayable(pl.Tracks))
 			}
 		})
 	}()
 }
 
-func firstPlayable(tracks []netease.Track) int {
+// canPlay reports whether a track can stream from the app: as it may
+// normally, or through an imported source — a cross-platform search hit
+// (t.Platform set), or a NetEase song NetEase cannot serve (a greyed-out VIP
+// one) that a wy source resolves instead.
+func (a *app) canPlay(t netease.Track) bool {
+	if t.Playable() {
+		return true
+	}
+	if t.Platform != "" {
+		// A cross-platform hit plays through its own source, unless the
+		// platform itself gates it (a paid QQ song).
+		return t.Fee == 0
+	}
+	return a.sources != nil && a.sources.HasWy()
+}
+
+// firstPlayable returns where the first playable track is, or 0 when none is
+// (the queue then tries, and skips, as it plays).
+func (a *app) firstPlayable(tracks []netease.Track) int {
 	for i := range tracks {
-		if tracks[i].Playable() {
+		if a.canPlay(tracks[i]) {
 			return i
 		}
 	}

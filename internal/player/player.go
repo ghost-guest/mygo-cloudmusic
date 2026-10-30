@@ -719,13 +719,18 @@ func (p *Player) streamFor(t netease.Track, level string) (*netease.Stream, erro
 		return p.SourceURL(t, level)
 	}
 	info, err := p.songURL(t.ID, level)
-	if err == netease.ErrUnavailable && p.StreamFallback != nil {
-		info, err = p.StreamFallback(t, level)
+	if err == nil {
+		return info, nil
 	}
-	if err != nil {
-		return nil, err
+	// NetEase would not serve it (a greyed-out VIP song): an imported source
+	// may, so unlock it seamlessly. This covers any failure, not just
+	// ErrUnavailable, so a logged-out or erroring eapi still falls back.
+	if p.StreamFallback != nil {
+		if fb, ferr := p.StreamFallback(t, level); ferr == nil {
+			return fb, nil
+		}
 	}
-	return info, nil
+	return nil, err
 }
 
 // Session is where playback was left, to pick up again.

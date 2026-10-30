@@ -44,9 +44,11 @@ type PlatformInfo struct {
 }
 
 // Supports reports whether the platform serves action (musicUrl, search).
+// The LX desktop contract names search "musicSearch"; a source that declares
+// it can search, so asking for "search" matches either name.
 func (p PlatformInfo) Supports(action string) bool {
 	for _, a := range p.Actions {
-		if a == action {
+		if a == action || action == "search" && a == "musicSearch" {
 			return true
 		}
 	}
@@ -138,7 +140,10 @@ func (s *Source) injectGlobals() {
 	events.Set("inited", "inited")
 	events.Set("updateAlert", "updateAlert")
 	lx.Set("EVENT_NAMES", events)
-	lx.Set("env", "desktop")
+	env := rt.NewObject()
+	env.Set("version", "1.0.0")
+	env.Set("platform", "desktop")
+	lx.Set("env", env)
 	lx.Set("version", "1.0.0")
 	lx.Set("request", s.jsRequest)
 	lx.Set("on", s.jsOn)

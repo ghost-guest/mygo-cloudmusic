@@ -169,6 +169,19 @@ func (a *app) searchField(c *ui.Context) {
 			cb.SetOpen(false)
 			a.search(q)
 		}
+		// The "来源" dropdown sits beside the field: NetEase, or a platform an
+		// imported source can search (酷我, 酷狗, QQ音乐, 咪咕…).
+		if labels, ids := a.sourceOptions(); len(labels) > 1 {
+			chosen := "网易云"
+			for name, id := range ids {
+				if id == a.source {
+					chosen = name
+				}
+			}
+			if ui.Select(c.Key("search-field-source"), &chosen, labels).Width(98).Changed() {
+				a.source = ids[chosen]
+			}
+		}
 	})
 }
 
