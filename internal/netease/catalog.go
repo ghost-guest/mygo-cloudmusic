@@ -157,5 +157,11 @@ func (r *SearchResult) Append(next SearchResult) {
 	r.Artists = append(r.Artists, next.Artists...)
 	r.Users = append(r.Users, next.Users...)
 	r.Podcasts = append(r.Podcasts, next.Podcasts...)
-	r.Total = next.Total
+	r.Playlists = append(r.Playlists, next.Playlists...)
+	// A page may re-report how much it found in all lower than an earlier
+	// one did — NetEase's count of playlists swings by hundreds between the
+	// pages of one search — and what has been found cannot shrink.
+	if next.Total > r.Total {
+		r.Total = next.Total
+	}
 }
