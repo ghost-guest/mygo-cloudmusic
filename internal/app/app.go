@@ -70,14 +70,20 @@ type app struct {
 	// answered, and those asked about: see ui_like.go.
 	likedPrograms, askedPrograms map[int64]bool
 
-	daily       []netease.Track
-	dailySpin   spinState // the record on the daily card
-	dailyBars   barState  // the bars on its play button
-	featured    []netease.Playlist
-	charts      []netease.Playlist
-	homeErr     string
-	homeLoading bool
-	homeAt      time.Time // when what the home page shows was asked for
+	daily     []netease.Track
+	dailySpin spinState // the record on the daily card
+	dailyBars barState  // the bars on its play button
+	featured  []netease.Playlist
+	charts    []netease.Playlist
+	// The playlists picked for the theme chosen on the home page: 90后经典
+	// 老歌 and the like, searched for by name.
+	themePlaylists []netease.Playlist
+	themeName      string // the theme these are for, "" before the first load
+	themeLoading   bool
+	themeErr       string
+	homeErr        string
+	homeLoading    bool
+	homeAt         time.Time // when what the home page shows was asked for
 
 	playlists  map[int64]*netease.Playlist
 	loadingPl  map[int64]bool
@@ -144,8 +150,8 @@ type app struct {
 
 	settings    settings
 	settingsWin *mygo.Window
-	cacheUsed   int64 // the bytes the song cache takes, -1 until measured
-	updates     bool  // the update plugin is used (useUpdater)
+	cacheUsed   int64                 // the bytes the song cache takes, -1 until measured
+	updates     bool                  // the update plugin is used (useUpdater)
 	sources     *source.SourceManager // imported LX music sources
 
 	restored     bool   // playback picked up where it was left

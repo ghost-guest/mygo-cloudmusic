@@ -9,43 +9,47 @@ import (
 type SearchType int
 
 const (
-	SearchSongs    SearchType = 1
-	SearchAlbums   SearchType = 10
-	SearchArtists  SearchType = 100
-	SearchUsers    SearchType = 1002
-	SearchPodcasts SearchType = 1009
+	SearchSongs     SearchType = 1
+	SearchAlbums    SearchType = 10
+	SearchArtists   SearchType = 100
+	SearchPlaylists SearchType = 1000
+	SearchUsers     SearchType = 1002
+	SearchPodcasts  SearchType = 1009
 )
 
 // SearchResult is a page of what a search found, of the one type it
 // looked for, and how many it found in all.
 type SearchResult struct {
-	Songs    []Track
-	Albums   []AlbumProfile
-	Artists  []ArtistProfile
-	Users    []User
-	Podcasts []Podcast
-	Total    int
+	Songs     []Track
+	Albums    []AlbumProfile
+	Artists   []ArtistProfile
+	Users     []User
+	Podcasts  []Podcast
+	Playlists []Playlist
+	Total     int
 }
 
 // Len is how many the page has.
 func (r *SearchResult) Len() int {
-	return len(r.Songs) + len(r.Albums) + len(r.Artists) + len(r.Users) + len(r.Podcasts)
+	return len(r.Songs) + len(r.Albums) + len(r.Artists) + len(r.Users) + len(r.Podcasts) + len(r.Playlists)
 }
 
 // SearchPage returns limit of what matches a query, of a type, from offset.
 func SearchPage(query string, kind SearchType, limit, offset int) (SearchResult, error) {
 	var res struct {
 		Result struct {
-			Songs        []Track         `json:"songs"`
-			SongCount    int             `json:"songCount"`
-			Albums       []AlbumProfile  `json:"albums"`
-			AlbumCount   int             `json:"albumCount"`
-			Artists      []ArtistProfile `json:"artists"`
-			ArtistCount  int             `json:"artistCount"`
-			Users        []User          `json:"userprofiles"`
-			UserCount    int             `json:"userprofileCount"`
-			Podcasts     []Podcast       `json:"djRadios"`
-			PodcastCount int             `json:"djRadiosCount"`
+			Songs         []Track         `json:"songs"`
+			SongCount     int             `json:"songCount"`
+			Albums        []AlbumProfile  `json:"albums"`
+			AlbumCount    int             `json:"albumCount"`
+			Artists       []ArtistProfile `json:"artists"`
+			ArtistCount   int             `json:"artistCount"`
+			Users         []User          `json:"userprofiles"`
+			UserCount     int             `json:"userprofileCount"`
+			Podcasts      []Podcast       `json:"djRadios"`
+			PodcastCount  int             `json:"djRadiosCount"`
+			Playlists     []Playlist      `json:"playlists"`
+			PlaylistCount int             `json:"playlistCount"`
 		} `json:"result"`
 	}
 	q := url.Values{"s": {query}, "type": {strconv.Itoa(int(kind))}, "limit": {strconv.Itoa(limit)}, "offset": {strconv.Itoa(offset)}, "total": {"true"}}
@@ -58,7 +62,8 @@ func SearchPage(query string, kind SearchType, limit, offset int) (SearchResult,
 	detailPrivileges(r.Songs)
 	return SearchResult{
 		Songs: r.Songs, Albums: r.Albums, Artists: r.Artists, Users: r.Users, Podcasts: r.Podcasts,
-		Total: r.SongCount + r.AlbumCount + r.ArtistCount + r.UserCount + r.PodcastCount,
+		Playlists: r.Playlists,
+		Total:     r.SongCount + r.AlbumCount + r.ArtistCount + r.UserCount + r.PodcastCount + r.PlaylistCount,
 	}, nil
 }
 

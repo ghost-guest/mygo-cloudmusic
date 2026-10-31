@@ -73,6 +73,8 @@ func (a *app) homePage(c *ui.Context) {
 			}
 		})
 
+		a.themeSection(c)
+
 		a.section(c, "推荐歌单")
 		ui.Grid(c).Columns(a.columns(c, 168)).GapX(20).GapY(28).Children(func() {
 			for i := range a.featured {

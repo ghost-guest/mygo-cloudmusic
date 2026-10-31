@@ -70,6 +70,9 @@ func (a *app) signedIn(prof *netease.Profile) {
 	a.searches = map[route]*searchData{}
 	a.load(a.route)
 	a.loadHome()
+	// The home page's themed playlists load beside it, so a slow theme search
+	// never holds up the songs and charts.
+	go a.loadTheme(homeThemes[0])
 	if prof == nil {
 		return
 	}

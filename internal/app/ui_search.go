@@ -28,6 +28,7 @@ var searchKinds = []struct {
 	{netease.SearchSongs, "单曲", "首单曲"},
 	{netease.SearchArtists, "歌手", "位歌手"},
 	{netease.SearchAlbums, "专辑", "张专辑"},
+	{netease.SearchPlaylists, "歌单", "个歌单"},
 	{netease.SearchUsers, "用户", "位用户"},
 	{netease.SearchPodcasts, "播客", "个播客"},
 }
@@ -222,6 +223,12 @@ func (a *app) searchPage(c *ui.Context) {
 			})
 		case netease.SearchAlbums:
 			a.albumGrid(c, res.Albums)
+		case netease.SearchPlaylists:
+			ui.Grid(c).Columns(a.columns(c, 168)).GapX(20).GapY(28).Children(func() {
+				for i := range res.Playlists {
+					a.playlistCard(c.Key(res.Playlists[i].ID), &res.Playlists[i])
+				}
+			})
 		case netease.SearchUsers:
 			for i := range res.Users {
 				a.userRow(c.Key(res.Users[i].UserID), &res.Users[i])
@@ -260,7 +267,14 @@ func (a *app) searchHeader(c *ui.Context, d *searchData) {
 	r := a.route
 	sub := "搜索"
 	at := 0
-	for i, k := range searchKinds {
+	// A platform searched through a source only looks for songs, so the
+	// other kinds are not offered there: switching to one would show a page
+	// with nothing on it.
+	kinds := searchKinds
+	if r.source != "" {
+		kinds = searchKinds[:1]
+	}
+	for i, k := range kinds {
 		if k.kind == r.kind {
 			at = i
 			if d.page.loaded {
@@ -270,12 +284,12 @@ func (a *app) searchHeader(c *ui.Context, d *searchData) {
 	}
 	a.heading(c, "“"+r.query+"”", sub)
 	ui.Row(c).Margin(0, 0, 18, 0).Gap(12).AlignItems(ui.Center).Children(func() {
-		labels := make([]string, len(searchKinds))
-		for i, k := range searchKinds {
+		labels := make([]string, len(kinds))
+		for i, k := range kinds {
 			labels[i] = k.label
 		}
 		if segmented(c.Key("kind"), &at, labels...) {
-			r.kind = searchKinds[at].kind
+			r.kind = kinds[at].kind
 			a.show(r)
 		}
 		a.sourceSelect(c, r)
