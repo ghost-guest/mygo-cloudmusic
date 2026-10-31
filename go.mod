@@ -8,6 +8,7 @@ require (
 	github.com/dop251/goja v0.0.0-20261029153331-f81816846776
 	github.com/ebitengine/purego v0.11.1
 	github.com/egoist/mygo v0.7.1-0.20261027023711-da3657e7f86a
+	github.com/guohuiyuan/music-lib v1.1.1
 	github.com/hajimehoshi/go-mp3 v0.3.4
 	github.com/mewkiz/flac v1.0.14
 	golang.org/x/image v0.46.0

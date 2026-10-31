@@ -31,6 +31,7 @@ func (m *SourceManager) MatchTrack(t netease.Track, level string) (*netease.Stre
 	want := time.Duration(t.Duration) * time.Millisecond
 	for _, match := range []func(string, string, string, time.Duration) (*netease.Stream, error){
 		m.matchKuwo,
+		m.matchMigu,
 		m.matchQQ,
 	} {
 		st, err := match(name, singer, level, want)
@@ -79,6 +80,47 @@ func (m *SourceManager) matchKuwo(name, singer, level string, want time.Duration
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("kuwo: no usable hit")
+	}
+	return nil, lastErr
+}
+
+// matchMigu searches 咪咕音乐 for the song through music-lib and returns the
+// first hit whose audio is the whole song. It is tried after Kuwo because it
+// gives FLAC but takes a little longer, and before QQ because it needs no fee
+// check: 咪咕 serves the songs it lists.
+func (m *SourceManager) matchMigu(name, singer, level string, want time.Duration) (*netease.Stream, error) {
+	keyword := strings.TrimSpace(name + " " + singer)
+	hits, err := MiguSearch(keyword, 1, 10)
+	if err != nil {
+		return nil, err
+	}
+	hits = rankHits(name, singer, hits)
+	if len(hits) == 0 {
+		return nil, fmt.Errorf("migu: no close match")
+	}
+	var lastErr error
+	for _, h := range hits[0:min(len(hits), 3)] {
+		u, ext, err := MiguURL(h.ID, h.Name, h.Singer)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if err := m.probeStream(u); err != nil {
+			lastErr = err
+			continue
+		}
+		if !audioFits(u, want) {
+			lastErr = fmt.Errorf("migu: %q is a short clip", h.Name)
+			continue
+		}
+		stLevel := level
+		if strings.EqualFold(ext, "flac") {
+			stLevel = "lossless"
+		}
+		return &netease.Stream{URL: u, Level: stLevel, Type: ext}, nil
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("migu: no usable hit")
 	}
 	return nil, lastErr
 }

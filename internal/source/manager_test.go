@@ -25,14 +25,14 @@ on(EVENT_NAMES.request, ({ source, action, info }) => {
   if (action === 'search') return new Promise((resolve, reject) => {
     request(%q, { method: 'GET' }, (err, resp) => {
       if (err) return reject(new Error(err))
-      resolve(resp.body.list.map(x => ({ id: x.id, name: x.name, singer: x.singer, albumName: x.album, source: 'mg' })))
+      resolve(resp.body.list.map(x => ({ id: x.id, name: x.name, singer: x.singer, albumName: x.album, source: 'kg' })))
     })
   })
   return Promise.reject(new Error('no ' + action))
 })
 send(EVENT_NAMES.inited, { sources: {
   wy: { name: '网易云', type: 'music', actions: ['musicUrl'], qualitys: ['128k'] },
-  mg: { name: '咪咕', type: 'music', actions: ['search'], qualitys: ['128k'] }
+  kg: { name: '酷狗', type: 'music', actions: ['search'], qualitys: ['128k'] }
 } })
 `, srv.URL)
 
@@ -62,11 +62,11 @@ send(EVENT_NAMES.inited, { sources: {
 		t.Fatalf("stream = %+v", st)
 	}
 
-	got, err := m.Search("mg", "song", 1, 10)
+	got, err := m.Search("kg", "song", 1, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].Name != "SongA" || got[0].Singer != "ArtistB" || got[0].Source != "mg" {
+	if len(got) != 1 || got[0].Name != "SongA" || got[0].Singer != "ArtistB" || got[0].Source != "kg" {
 		t.Fatalf("search = %+v", got)
 	}
 }

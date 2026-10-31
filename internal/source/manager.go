@@ -633,6 +633,10 @@ func (m *SourceManager) Search(platform, keyword string, page, limit int) ([]Sou
 		// QQ Music, searched natively, so the 来源 dropdown returns real
 		// songs even though no imported source declares a search action.
 		return QQSearch(keyword, page, limit)
+	case "mg":
+		// 咪咕音乐 through music-lib: it serves whole songs, often FLAC, with
+		// no cookie, which is what unlocks the songs Kuwo only previews.
+		return MiguSearch(keyword, page, limit)
 	}
 	// LX sources read keyword/page/pagesize; older ones read limit instead.
 	info := map[string]any{
@@ -795,6 +799,13 @@ func (m *SourceManager) ResolveTrackURL(t netease.Track, level string) (*netease
 		}
 		return &netease.Stream{URL: u, Level: level, Type: inferType(u)}, nil
 	}
+	if t.Platform == "mg" {
+		u, ext, err := MiguURL(t.SourceID, t.Name, t.ArtistNames())
+		if err != nil {
+			return nil, err
+		}
+		return &netease.Stream{URL: u, Level: level, Type: ext}, nil
+	}
 	songID := t.SourceID
 	if songID == "" {
 		songID = strconv.FormatInt(t.ID, 10)
@@ -849,6 +860,7 @@ var platformNames = map[string]string{
 var builtinSearchPlatforms = []PlatformChoice{
 	{ID: "kw", Name: "酷我"},
 	{ID: "tx", Name: "QQ音乐"},
+	{ID: "mg", Name: "咪咕音乐"},
 }
 
 // deadSearchPlatforms are platforms a bundled source still advertises but

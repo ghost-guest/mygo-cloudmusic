@@ -7,7 +7,7 @@ import (
 )
 
 // The 来源 choices always include the platforms the app searches natively,
-// 酷我 and QQ音乐, so the dropdown can be used even with no imported source
+// 酷我, QQ音乐 and 咪咕音乐, so the dropdown can be used even with no imported source
 // declaring a search action. Before this the list held only 网易云 and the
 // dropdown hid itself, which looked like a missing feature.
 func TestSearchSourceOptionsBuiltin(t *testing.T) {
@@ -16,8 +16,8 @@ func TestSearchSourceOptionsBuiltin(t *testing.T) {
 	a := newTestApp()
 	a.sources = m
 	labels, ids := a.sourceOptions()
-	if len(labels) < 3 || ids["酷我"] != "kw" || ids["QQ音乐"] != "tx" {
-		t.Fatalf("labels = %v (ids %v), want 网易云, 酷我, QQ音乐", labels, ids)
+	if len(labels) < 4 || ids["酷我"] != "kw" || ids["QQ音乐"] != "tx" || ids["咪咕音乐"] != "mg" {
+		t.Fatalf("labels = %v (ids %v), want 网易云, 酷我, QQ音乐, 咪咕音乐", labels, ids)
 	}
 	// A platform whose backend is dead stays out, so no choice can only fail.
 	if _, ok := ids["汽水VIP"]; ok {
