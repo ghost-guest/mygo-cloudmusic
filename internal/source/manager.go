@@ -35,6 +35,9 @@ type SourceManager struct {
 	// probeURL, when set, stands in for the network probe that confirms a
 	// resolved URL serves audio. Tests swap it so no real request is made.
 	probeURL func(url string) error
+	// noNativeMatch turns off the native cross-platform match (Kuwo, then
+	// QQ), so a test of the imported-source path makes no external request.
+	noNativeMatch bool
 }
 
 // LoadedSource is one imported source and whether it is in use.
@@ -182,10 +185,13 @@ func (m *SourceManager) EnsureDefaults(logf func(string)) {
 	}
 }
 
-// HasWy reports whether an enabled wy source is running, so a NetEase song
-// without a stream of its own (a greyed-out VIP one) may still play.
+// HasWy reports whether a NetEase song without a stream of its own (a
+// grayed-out VIP one) may still play. The built-in cross-platform matcher
+// (Kuwo, then QQ) is always compiled in, so this is true even with no
+// imported source; enabling a wy source adds to it. A song the matcher cannot
+// find then fails to load and is skipped, rather than the whole list greying.
 func (m *SourceManager) HasWy() bool {
-	return len(m.sourcesFor("wy", "musicUrl")) > 0
+	return true
 }
 
 // lookup returns a source snapshot by slug with the lock held.
@@ -436,7 +442,18 @@ func (m *SourceManager) sourcesFor(platform, action string) []*Source {
 // A resolved URL is probed before being returned: sources sometimes hand
 // back a 404 page instead of a link, and we must not trade a missing song
 // for a broken one.
+// ResolveWyURL returns a stream for a NetEase track that NetEase itself will
+// not serve (a grayed-out VIP song). It first matches the song on another
+// platform natively (Kuwo, then QQ) as UnblockNeteaseMusic does, then tries
+// the imported LX sources, then NetEase's own outer link. Each resolved URL is
+// probed before it is returned, so a 404 page is never taken for audio.
 func (m *SourceManager) ResolveWyURL(t netease.Track, level string) (*netease.Stream, error) {
+	// Native cross-platform match first: fast and needs no imported source.
+	if !m.noNativeMatch {
+		if st, err := m.MatchTrack(t, level); err == nil {
+			return st, nil
+		}
+	}
 	songmid := strconv.FormatInt(t.ID, 10)
 	musicInfo := map[string]any{
 		"id":        t.ID,
@@ -831,8 +848,14 @@ var builtinSearchPlatforms = []PlatformChoice{
 	{ID: "tx", Name: "QQ音乐"},
 }
 
+// deadSearchPlatforms are platforms a bundled source still advertises but
+// whose search backend no longer answers: 汽水VIP returns HTTP 404 (checked
+// 2026-10). They are left out of the 来源 dropdown so it never offers a choice
+// that can only fail; their resolve action stays available.
+var deadSearchPlatforms = map[string]bool{"qsvip": true}
+
 // SearchPlatforms returns the platforms the user may search across: those an
-// imported source can search, plus the built-in ones (Kuwo), each once,
+// imported source can search, plus the built-in ones (Kuwo, QQ), each once,
 // sorted by name.
 func (m *SourceManager) SearchPlatforms() []PlatformChoice {
 	m.mu.RLock()
@@ -844,7 +867,7 @@ func (m *SourceManager) SearchPlatforms() []PlatformChoice {
 			continue
 		}
 		for plat, info := range ls.metaFor().Sources {
-			if !info.Supports("search") || seen[plat] {
+			if !info.Supports("search") || seen[plat] || deadSearchPlatforms[plat] {
 				continue
 			}
 			seen[plat] = true

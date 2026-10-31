@@ -178,6 +178,7 @@ func (a *app) sidebar(c *ui.Context) {
 	// the title bar it reaches up into would.
 	ui.Column(c).Fill().Padding(top, 14, 14, 14).Gap(4).DragWindow().Children(func() {
 		a.searchField(c)
+		a.searchSourceSelect(c)
 
 		ui.Scroll(c.Key("nav")).TrackScroll(&a.navScroll).Grow(1).Margin(0, -6).Padding(0, 6).Gap(4).Children(func() {
 			a.navItem(c, iconHome, "为你推荐", route{page: pageHome})
@@ -479,7 +480,12 @@ func (a *app) canPlay(t netease.Track) bool {
 		// platform itself gates it (a paid QQ song).
 		return t.Fee == 0
 	}
-	return a.sources != nil && a.sources.HasWy()
+	// A greyed-out or VIP NetEase song is unlocked by matching it on Kuwo or
+	// QQ, which is built into the app and needs no imported source. So it
+	// shows no VIP badge and is not dimmed: if a match exists it plays like
+	// any other song. A song with no match anywhere still fails on play and
+	// the player moves on.
+	return true
 }
 
 // firstPlayable returns where the first playable track is, or 0 when none is

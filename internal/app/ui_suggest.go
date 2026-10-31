@@ -169,18 +169,30 @@ func (a *app) searchField(c *ui.Context) {
 			cb.SetOpen(false)
 			a.search(q)
 		}
-		// The "来源" dropdown sits beside the field: NetEase, or a platform an
-		// imported source can search (酷我, 酷狗, QQ音乐, 咪咕…).
-		if labels, ids := a.sourceOptions(); len(labels) > 1 {
-			chosen := "网易云"
-			for name, id := range ids {
-				if id == a.source {
-					chosen = name
-				}
-			}
-			if ui.Select(c.Key("search-field-source"), &chosen, labels).Width(98).Changed() {
-				a.source = ids[chosen]
-			}
+	})
+}
+
+// searchSourceSelect is the "来源" dropdown under the search field: NetEase,
+// or a platform searched natively or by an imported source (酷我, QQ音乐…).
+// It sits on its own row: sharing the field's row squeezed the query box down
+// to a couple of characters, which made the field look like it had no
+// dropdown at all.
+func (a *app) searchSourceSelect(c *ui.Context) {
+	labels, ids := a.sourceOptions()
+	if len(labels) <= 1 {
+		return
+	}
+	chosen := "网易云"
+	for name, id := range ids {
+		if id == a.source {
+			chosen = name
+		}
+	}
+	p := a.pal
+	ui.Row(c).Margin(0, 0, 12, 0).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Text(c, "来源").FontSize(12).TextColor(p.faint)
+		if ui.Select(c.Key("search-field-source"), &chosen, labels).Label("来源").Grow(1).Changed() {
+			a.source = ids[chosen]
 		}
 	})
 }

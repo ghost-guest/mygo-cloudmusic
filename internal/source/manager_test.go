@@ -47,6 +47,7 @@ send(EVENT_NAMES.inited, { sources: {
 	m.sources["test"] = ls
 	m.startLocked(ls)
 	m.probeURL = func(url string) error { return nil }
+	m.noNativeMatch = true // this test covers the imported-source path only
 	m.mu.Unlock()
 	if ls.Error != "" {
 		t.Fatalf("start: %s", ls.Error)
@@ -149,6 +150,7 @@ send(EVENT_NAMES.inited, { sources: { wy: { name: 'wy', type: 'music', actions: 
 	m.startLocked(ls1)
 	m.startLocked(ls2)
 	m.probeURL = func(url string) error { return nil }
+	m.noNativeMatch = true // this test covers the imported-source path only
 	m.mu.Unlock()
 	defer ls1.source.Close()
 	defer ls2.source.Close()

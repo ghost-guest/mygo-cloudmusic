@@ -30,20 +30,22 @@ func TestStreamForFallback(t *testing.T) {
 	}
 }
 
-// A non-availability error is not sent to the fallback.
+// Any NetEase failure reaches the fallback, not only ErrUnavailable: a
+// logged-out or erroring eapi must still unlock a greyed-out VIP song.
 func TestStreamForHardError(t *testing.T) {
 	p := New(func(func()) {})
+	hard := errors.New("network down")
 	p.songURL = func(id int64, level string) (*netease.Stream, error) {
-		return nil, errors.New("network down")
+		return nil, hard
 	}
 	called := false
 	p.StreamFallback = func(tk netease.Track, level string) (*netease.Stream, error) {
 		called = true
-		return nil, nil
+		return nil, errors.New("no match")
 	}
 	_, err := p.streamFor(netease.Track{ID: 7}, "exhigh")
-	if err == nil || called {
-		t.Fatalf("want hard error, fallback called=%v err=%v", called, err)
+	if !errors.Is(err, hard) || !called {
+		t.Fatalf("want the hard error after trying the fallback, called=%v err=%v", called, err)
 	}
 }
 

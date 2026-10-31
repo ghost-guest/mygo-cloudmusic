@@ -7,9 +7,9 @@ import (
 	"netease-music-mygo/internal/source"
 )
 
-// A greyed-out VIP song plays when an enabled wy source can resolve it; a
-// source-platform track plays through its own source unless the platform
-// gates it (a paid QQ song); only without either does it stay grey.
+// A greyed-out VIP song is unlocked by the built-in cross-platform match, so
+// it counts as playable and is not dimmed; a source-platform track plays
+// through its own source unless the platform gates it (a paid QQ song).
 func TestCanPlay(t *testing.T) {
 	a := newTestApp()
 	vip := netease.Track{ID: 1, Fee: 1}
@@ -20,8 +20,8 @@ func TestCanPlay(t *testing.T) {
 	if !a.canPlay(normal) {
 		t.Fatal("a normal track is playable")
 	}
-	if a.canPlay(vip) {
-		t.Fatal("a VIP track is not playable without a source")
+	if !a.canPlay(vip) {
+		t.Fatal("a VIP track is playable through the built-in match")
 	}
 	if !a.canPlay(platform) {
 		t.Fatal("a source-platform track is playable")
@@ -35,7 +35,7 @@ func TestCanPlay(t *testing.T) {
 	m.EnsureDefaults(nil)
 	a.sources = m
 	if !a.canPlay(vip) {
-		t.Fatal("a VIP track is playable with a wy source")
+		t.Fatal("a VIP track stays playable with sources loaded")
 	}
 	if !a.canPlay(normal) {
 		t.Fatal("a normal track stays playable")

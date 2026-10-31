@@ -54,12 +54,12 @@ func KuwoSearch(keyword string, page, limit int) ([]SourceTrack, error) {
 	}
 	var parsed struct {
 		Abslist []struct {
-			MusicRID  string `json:"MUSICRID"`
-			SongName  string `json:"SONGNAME"`
-			Artist    string `json:"ARTIST"`
-			Album     string `json:"ALBUM"`
-			SongTime  string `json:"SONGTIME"`
-			Format    string `json:"MUSICFORMAT"`
+			MusicRID string `json:"MUSICRID"`
+			SongName string `json:"SONGNAME"`
+			Artist   string `json:"ARTIST"`
+			Album    string `json:"ALBUM"`
+			SongTime string `json:"SONGTIME"`
+			Format   string `json:"MUSICFORMAT"`
 		} `json:"abslist"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
@@ -100,33 +100,80 @@ func kuwoInterval(s string) string {
 }
 
 // KuwoURL resolves a Kuwo song (its MUSICRID, e.g. "MUSIC_228908") to a
-// playable MP3 URL. Kuwo's anti server hands back the raw link as text.
+// playable MP3 URL.
+//
+// It goes through Kuwo's signed mobile endpoint. The old public
+// `antiserver.kuwo.cn/anti.s?type=convert_url` route still answers with a
+// URL, but it now ignores the rid: different songs came back pointing at the
+// same file, so a greyed-out NetEase song resolved to unrelated audio. The
+// mobile endpoint honours the rid and returns that song's own bitrate.
 func KuwoURL(songID string, level string) (string, error) {
 	rid := strings.TrimSpace(songID)
+	rid = strings.TrimPrefix(rid, "MUSIC_")
+	rid = strings.TrimPrefix(rid, "music_")
 	if rid == "" {
 		return "", fmt.Errorf("kuwo: empty song id")
 	}
-	// Strip a leading "MUSIC_" if a caller left it; the anti server wants
-	// the bare id, but accepts the prefixed form too.
-	format := "mp3"
-	api := fmt.Sprintf("http://antiserver.kuwo.cn/anti.s?format=%s&rid=%s&type=convert_url&response=url", format, url.QueryEscape(rid))
+	br := kuwoBitrate(level)
+	q := url.Values{}
+	q.Set("f", "web")
+	q.Set("user", "0")
+	q.Set("source", kuwoMobileSource)
+	q.Set("type", "convert_url_with_sign")
+	q.Set("rid", rid)
+	q.Set("br", br)
+	api := "http://nmobi.kuwo.cn/mobi.s?" + q.Encode()
+
 	req, err := http.NewRequestWithContext(context.Background(), "GET", api, nil)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", hostUserAgent)
+	req.Header.Set("User-Agent", kuwoMobileUA)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
-	link, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", err
 	}
-	u := strings.TrimSpace(string(link))
-	if u == "" || strings.HasPrefix(u, "<") || !strings.HasPrefix(u, "http") {
+	var parsed struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+		Data struct {
+			URL    string `json:"url"`
+			Format string `json:"format"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return "", fmt.Errorf("kuwo: %w", err)
+	}
+	u := strings.TrimSpace(parsed.Data.URL)
+	if u == "" || u == "None" || !strings.HasPrefix(u, "http") {
+		if parsed.Msg != "" {
+			return "", fmt.Errorf("kuwo: %s", parsed.Msg)
+		}
 		return "", fmt.Errorf("kuwo returned no url")
 	}
 	return u, nil
+}
+
+const (
+	kuwoMobileSource = "kwplayerhd_ar_1.1.4.5_tianbao_T1A_qirui.apk"
+	kuwoMobileUA     = "Mozilla/5.0 (Linux; Android) AppleWebKit/537.36"
+)
+
+// kuwoBitrate maps a quality level onto the mobile endpoint's br codes.
+func kuwoBitrate(level string) string {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "128k", "128":
+		return "128kmp3"
+	case "flac", "lossless":
+		return "2000kflac"
+	case "flac24bit", "hires":
+		return "4000kflac"
+	default:
+		return "320kmp3"
+	}
 }
