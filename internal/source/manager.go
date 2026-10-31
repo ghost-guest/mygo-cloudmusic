@@ -493,7 +493,10 @@ func (m *SourceManager) ResolveWyURL(t netease.Track, level string) (*netease.St
 	// and VIP songs even though the API refuses, so one song need not fail
 	// just because every imported source's API is down.
 	if u, err := wyOuterURL(t.ID); err == nil {
-		if err := m.probeStream(u); err == nil {
+		// NetEase's outer link serves a short clip for some songs rather than
+		// refusing; the length check keeps a fragment from being played as
+		// the whole song.
+		if err := m.probeStream(u); err == nil && audioFits(u, time.Duration(t.Duration)*time.Millisecond) {
 			return &netease.Stream{URL: u, Level: level, Type: inferType(u)}, nil
 		}
 	}
