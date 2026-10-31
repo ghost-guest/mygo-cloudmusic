@@ -98,6 +98,29 @@ func TestManagerEnsureDefaultsBundled(t *testing.T) {
 	}
 }
 
+// A bundled source the listener already imported by hand under another slug
+// is not added a second time: the same script would show twice in the list.
+func TestManagerEnsureDefaultsSkipsImportedDuplicate(t *testing.T) {
+	js, err := bundledFS.ReadFile("defaults/helloworld.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(t.TempDir())
+	if _, err := m.addScript("mine", "https://example.com/latest.js", js); err != nil {
+		t.Fatal(err)
+	}
+	m.EnsureDefaults(nil)
+	list := m.List()
+	for _, ls := range list {
+		if ls.Slug == "helloworld" {
+			t.Fatalf("added the bundled source again: %+v", list)
+		}
+	}
+	if len(list) != len(DefaultSources) {
+		t.Fatalf("want %d sources (the import and the rest), got %d", len(DefaultSources), len(list))
+	}
+}
+
 // A disabled source is not picked for a fallback.
 func TestManagerDisabledNotPicked(t *testing.T) {
 	js := `

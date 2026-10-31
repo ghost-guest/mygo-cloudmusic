@@ -72,6 +72,7 @@ func NewManager(dir string) *SourceManager {
 // them, and a removed one stays removed. Order is the fallback priority,
 // best first — verified to serve audio for VIP songs at build time.
 var DefaultSources = []string{
+	"jiexiang",
 	"helloworld",
 	"hyw",
 	"fish",
@@ -129,9 +130,11 @@ func (m *SourceManager) writeSeeded(seeded map[string]bool) {
 // EnsureDefaults writes any bundled source not yet present, so the app ships
 // with working sources on first launch and after an update that adds one.
 // The scripts are embedded, so this needs no network. It leaves the user's
-// list alone otherwise: a default that is already there is kept as is, and
-// one the user removed stays removed (its slug is remembered in seeded).
-// Clearing every source opts out entirely. Failures are logged, never fatal.
+// list alone otherwise: a default that is already there is kept as is, one
+// the user removed stays removed (its slug is remembered in seeded), and one
+// the user imported by hand from the same script is not added again under a
+// second slug. Clearing every source opts out entirely. Failures are logged,
+// never fatal.
 func (m *SourceManager) EnsureDefaults(logf func(string)) {
 	m.mu.Lock()
 	if m.defaultsDisabledLocked() {
@@ -164,6 +167,14 @@ func (m *SourceManager) EnsureDefaults(logf func(string)) {
 			if logf != nil {
 				logf("音乐源读取失败 " + slug + "：" + err.Error())
 			}
+			continue
+		}
+		// A bundled source the listener already imported by hand under
+		// another slug — the same script from its own URL — is not added
+		// again: the source list would show it twice, both enabled.
+		if name := parseHeader(string(js)).Name; name != "" && m.hasName(name) {
+			seeded[slug] = true
+			changed = true
 			continue
 		}
 		if _, err := m.addScript(slug, "bundled:"+slug, js); err != nil {
@@ -201,6 +212,19 @@ func (m *SourceManager) lookup(slug string) *LoadedSource {
 		return &cp
 	}
 	return nil
+}
+
+// hasName reports whether a source is already loaded under a script's @name,
+// whatever slug it came in as.
+func (m *SourceManager) hasName(name string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, ls := range m.sources {
+		if ls.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // Dir returns the directory scripts are stored in.
